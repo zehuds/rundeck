@@ -1,0 +1,107 @@
+- hosts: all
+  tasks:
+    - name: Update APT package manager repositories cache
+      become: true
+      apt:
+        update_cache: yes
+    - name: Install a list of packages
+      become: true
+      ansible.builtin.apt:
+        pkg:
+        - python3-dnf
+        - acl
+        - python3-pip
+        - ansible
+    - name: Install Java
+      become: yes
+      apt:
+        name: "{{ packages }}"
+        state: present
+      vars:
+        packages:
+           - openjdk-11-jdk     #Rundeck requires very specific Java versions
+    - name: Install psycopg2 using Pip....
+      become: yes
+      shell: pip3 install psycopg2-binary==2.9.5
+
+    - name: Install ansible #### makes a difference when you install it from Ansible Repo 
+      become: yes
+      shell:
+         echo 'deb http://ppa.launchpad.net/ansible/ansible/ubuntu focal main' >> /etc/apt/sources.list.d/ansible.list
+         apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 93C4A3FD7BB9C367
+    - name: Update APT package manager repositories cache
+      become: true
+      apt:
+        update_cache: yes
+    - name: Install ansible from ansible repository
+      become: true
+      ansible.builtin.apt:
+        pkg:
+        - ansible
+
+    - name: Install postgres
+      become: true
+      ansible.builtin.apt:
+        name: postgresql
+        state: latest
+
+    - name: Check Postgres is running
+      become: true
+      shell: /etc/init.d/postgresql status
+      register: response
+    - debug: msg="{{ response.stdout }}"
+
+    - name: "Create Rundeck database"
+      postgresql_db:
+          state: present
+          name:  rundeck
+      become: true
+      become_user: postgres
+
+    - name: "Create db user"
+      postgresql_user:
+          state: present
+          name: rundeckuser
+          password:  rundeckpassword
+      become: yes
+      become_user: postgres
+
+    - name: "Grant db user access to app db"
+      postgresql_privs:
+          type: database
+          database: rundeck
+          roles: rundeckuser
+          grant_option: no
+          privs: all
+      become: yes
+      become_user: postgres
+
+    - name: "Allow md5 connection for the db user"
+      postgresql_pg_hba:
+          dest: "/etc/postgresql/13/main/pg_hba.conf"
+          contype: host
+          databases: all
+          method: md5
+          users: rundeckuser
+          create: true
+      become: yes
+      become_user: postgres
+
+
+    - name: Install rundeck
+      become: true
+      shell: 'curl https://raw.githubusercontent.com/rundeck/packaging/main/scripts/deb-setup.sh 2> /dev/null | sudo bash -s rundeck'  ###this creates and updates /etc/apt/sources.list.d/rundeck.list
+
+    - name: Install rundeck
+      become: true
+      ansible.builtin.apt:
+        pkg:
+        - rundeck
+
+    - name: Setup Postgres Config file for rundeck user to connect to databases
+      become: true
+      shell: echo  "dataSource.driverClassName = org.postgresql.Driver\ndataSource.url = jdbc:postgresql://pgsql.rundeck.local/rundeck\ndataSource.username = rundeckuser\ndataSource.password = rundeckpassword" >> /etc/rundeck/rundeck-config.properties
+
+    - name: Start Rundeck service
+      become: yes
+      shell: /etc/init.d/rundeckd start
